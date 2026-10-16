@@ -36,6 +36,21 @@ jobs:
         with:
           packages: "platforms;android-36 build-tools;36.0.0 ndk;29.0.14206865 cmake;3.22.1"
 
+      - name: Provide signing config
+        run: |
+          KS="$RUNNER_TEMP/release.jks"
+          PASS="$(openssl rand -hex 16)"
+          keytool -genkeypair -keystore "$KS" -storetype PKCS12 \
+            -alias ax -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "$PASS" -keypass "$PASS" -dname "CN=AxManager"
+          {
+            echo "sdk.dir=$ANDROID_HOME"
+            echo "signing.storeFile=$KS"
+            echo "signing.storePassword=$PASS"
+            echo "signing.keyAlias=ax"
+            echo "signing.keyPassword=$PASS"
+          } > local.properties
+
       - name: Build
         run: |
           chmod +x gradlew
