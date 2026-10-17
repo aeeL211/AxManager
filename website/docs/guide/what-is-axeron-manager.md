@@ -1,4 +1,4 @@
-# What is Axeron Manager?
+# <Icon name="info" /> What is Axeron Manager?
 
 Axeron Manager (AxManager) is an open experiment to build a more inclusive Android “manager.”
 Instead of being strictly tied to root access, AxManager focuses on ADB/Non-Root mode so it can run on a wider range of devices. At the same time, its architecture remains flexible — allowing optional root execution, support for third-party plugins, and even a Web-based Shell interface.
@@ -14,6 +14,8 @@ Instead of being strictly tied to root access, AxManager focuses on ADB/Non-Root
 ### Key Capabilities
 
 - Shell Executor: Run commands directly in ADB or Root context.
+
+- Any Terminal: Use the same shell from Termux or any other terminal app, with a full interactive terminal. [Learn More](./axsh)
 
 - Plugin Support: Extend functionality through unrooted modules. [Learn More](../plugin/what-is-plugin)
 

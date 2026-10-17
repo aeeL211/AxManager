@@ -18,10 +18,12 @@ import android.os.IBinder
 import android.os.IPowerManager
 import android.os.Looper
 import android.os.Parcel
+import android.os.ParcelFileDescriptor
 import android.os.Parcelable
 import android.os.PowerManager
 import android.os.RemoteException
 import android.os.SELinux
+import android.os.SystemProperties
 import android.os.ServiceManager
 import android.os.SystemClock
 import android.os.UserHandle
@@ -32,6 +34,7 @@ import frb.axeron.server.ServerConstants.MANAGER_APPLICATION_ID
 import frb.axeron.server.ServerConstants.PERMISSION
 import frb.axeron.server.ServerConstants.SHIZUKU_MANAGER_APPLICATION_ID
 import frb.axeron.server.api.RemoteProcessHolder
+import frb.axeron.server.axsh.AxshServer
 import frb.axeron.server.util.HandlerUtil
 import frb.axeron.server.util.IContentProviderCompat
 import frb.axeron.server.util.OsUtils
@@ -39,6 +42,7 @@ import frb.axeron.server.util.UserHandleCompat
 import frb.axeron.shared.AxeronApiConstant
 import frb.axeron.shared.AxeronApiConstant.server.BINDER_DESCRIPTOR
 import frb.axeron.shared.AxeronApiConstant.server.TYPE_ENV
+import frb.axeron.shared.MiuiAppOps
 import frb.axeron.shared.AxeronApiConstant.server.TYPE_NEW_ENV
 import frb.axeron.shared.AxeronApiConstant.server.VERSION_CODE
 import frb.axeron.shared.AxeronApiConstant.server.VERSION_NAME
@@ -66,7 +70,8 @@ import rikka.hidden.compat.PermissionManagerApis
 import rikka.hidden.compat.UserManagerApis
 import rikka.hidden.compat.util.SystemServiceBinder
 import rikka.parcelablelist.ParcelableListSlice
-import rikka.rish.RishConfig
+import frb.axeron.axsh.host.AxshProcess
+import frb.axeron.axsh.host.PtyHost
 import java.io.File
 import java.io.IOException
 import java.lang.ref.WeakReference
@@ -80,14 +85,15 @@ open class AxeronService :
         @JvmStatic
         fun main(args: Array<String>) {
             DdmHandleAppName.setAppName("axeron_server", 0)
-            RishConfig.setLibraryPath(System.getProperty("axeron.library.path"))
+            PtyHost.setLibraryPath(System.getProperty("axeron.library.path"))
 
             @Suppress("DEPRECATION")
             Looper.prepareMainLooper()
             // Before the service exists: its constructor already reads the root world's configs.
             if (Os.getuid() == 0) migrateRootWorld()
             ensureCacheDir(Os.getuid() == 0)
-            AxeronService()
+            val service = AxeronService()
+            service.startAxsh()
             Looper.loop()
         }
 
@@ -458,6 +464,36 @@ open class AxeronService :
         return checkCaller(callingUid)
     }
 
+    private var axshServer: AxshServer? = null
+
+    /**
+     * Native `axsh` clients (uid/pid from SO_PEERCRED) reach the same gate as binder callers:
+     * root/shell always, the manager app always, everything else only once granted per-uid.
+     */
+    private fun checkAxshCaller(uid: Int): Boolean {
+        if (uid == 0 || uid == 2000) return true
+        if (checkCaller(uid)) return true
+        return configManager.find(uid)?.isAllowed == true
+    }
+
+    fun startAxsh() {
+        val server = AxshServer(
+            server = { this },
+            authorize = { uid, _ -> checkAxshCaller(uid) },
+            // As requestPermission does for an unattached binder caller: found by uid alone, and
+            // answered right away when the manager has it denied.
+            requestPermission = { uid, pid ->
+                if (configManager.find(uid)?.isDenied == true) {
+                    axshServer?.onPermissionResult(uid, false)
+                } else {
+                    showPermissionConfirmation(0, null, uid, pid, UserHandleCompat.getUserId(uid))
+                }
+            }
+        )
+        axshServer = server
+        server.start()
+    }
+
     override fun checkCallerPermission(
         func: String?,
         callingUid: Int,
@@ -471,7 +507,7 @@ open class AxeronService :
         if (clientRecord != null) {
             return false
         }
-        // Non-attached callers (axerish/axrun, unattached Shizuku clients) are only allowed once
+        // Non-attached callers (axsh brokers, unattached Shizuku clients) are only allowed once
         // their uid has been granted permission, mirroring Service.checkSelfPermission().
         if (callingUid == 0 || callingUid == 2000) {
             return true
@@ -668,20 +704,33 @@ open class AxeronService :
      * WRITE_SETTINGS is an app-op, not a runtime permission (`pm grant` refuses it), so it is
      * allowed through `cmd appops`. Off the binder thread: it spawns a process.
      */
+    /**
+     * App-ops the manager needs, set like WRITE_SECURE_SETTINGS is granted: WRITE_SETTINGS, and on
+     * MIUI/HyperOS its own ops. Without Autostart there, a manager swiped from recents (which MIUI
+     * kills) can't be woken to hand axsh the server binder.
+     */
     private fun allowWriteSettings(userId: Int) {
         Thread {
-            try {
-                val code = Runtime.getRuntime().exec(
-                    arrayOf(
-                        "cmd", "appops", "set", "--user", userId.toString(),
-                        MANAGER_APPLICATION_ID, "WRITE_SETTINGS", "allow"
-                    )
-                ).waitFor()
-                if (code != 0) LOGGER.w("allow WRITE_SETTINGS exited with $code")
-            } catch (e: Throwable) {
-                LOGGER.w(e, "allow WRITE_SETTINGS")
+            allowManagerAppOp(userId, "WRITE_SETTINGS")
+            val miui = runCatching { SystemProperties.get(MiuiAppOps.VERSION_PROPERTY) }.getOrNull()
+            if (!miui.isNullOrEmpty()) {
+                MiuiAppOps.MANAGER_OPS.forEach { allowManagerAppOp(userId, it.toString()) }
             }
         }.start()
+    }
+
+    private fun allowManagerAppOp(userId: Int, op: String) {
+        try {
+            val code = Runtime.getRuntime().exec(
+                arrayOf(
+                    "cmd", "appops", "set", "--user", userId.toString(),
+                    MANAGER_APPLICATION_ID, op, "allow"
+                )
+            ).waitFor()
+            if (code != 0) LOGGER.w("allow %s exited with %d", op, code)
+        } catch (e: Throwable) {
+            LOGGER.w(e, "allow %s", op)
+        }
     }
 
     fun checkRuntime(): Boolean {
@@ -743,6 +792,60 @@ open class AxeronService :
         val token = clientRecord?.client?.asBinder()
 
         return RemoteProcessHolder(process, token)
+    }
+
+    override fun newAxshProcess(
+        cmd: Array<out String?>?,
+        env: Array<out String?>?,
+        dir: String?,
+        stdin: ParcelFileDescriptor?,
+        stdout: ParcelFileDescriptor?,
+        stderr: ParcelFileDescriptor?,
+        pty: Boolean,
+        size: Long
+    ): IAxshProcess {
+        // The binder stub has already made these fds in this process. Until PtyHost takes them
+        // they are ours to close: one left open (here a refusal, as before a permission prompt)
+        // holds the client's pipe, so its relay never sees EOF and `axsh -c` never returns.
+        try {
+            enforceCallingPermission("newAxshProcess")
+
+            LOGGER.d(
+                "newAxshProcess: uid=%d, pty=%s, cmd=%s",
+                getCallingUid(),
+                pty.toString(),
+                cmd.contentToString()
+            )
+
+            requireNotNull(stdin) { "stdin" }
+            requireNotNull(stdout) { "stdout" }
+            val argv = cmd?.filterNotNull()?.toTypedArray()
+            require(!argv.isNullOrEmpty()) { "empty command" }
+
+            return AxshProcess.start(
+                argv, env?.filterNotNull()?.toTypedArray(), dir, stdin, stdout, stderr, pty, size
+            )
+        } catch (e: Throwable) {
+            // Already detached ones (PtyHost failed later) close as a no-op.
+            for (fd in arrayOf(stdin, stdout, stderr)) {
+                try {
+                    fd?.close()
+                } catch (_: Exception) {
+                }
+            }
+            throw e
+        }
+    }
+
+    override fun openAxshChannel(): ParcelFileDescriptor {
+        enforceCallingPermission("openAxshChannel")
+        val server = checkNotNull(axshServer) { "axsh is not running" }
+        return server.openChannel(getCallingUid())
+    }
+
+    override fun closeAxshChannels(uid: Int) {
+        enforceManagerPermission("closeAxshChannels")
+        axshServer?.closeChannels(uid)
     }
 
     override fun getServerInfo(): ServerInfo {
@@ -868,6 +971,9 @@ open class AxeronService :
                 if (allowed) ConfigManager.FLAG_ALLOWED else ConfigManager.FLAG_DENIED
             )
         }
+
+        // axsh sessions on our own socket wait on this uid's answer, not as attached clients.
+        axshServer?.onPermissionResult(requestUid, allowed)
     }
 
     @Synchronized

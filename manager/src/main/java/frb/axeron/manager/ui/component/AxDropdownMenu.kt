@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 
@@ -26,12 +27,14 @@ fun AxDropdownMenu(
     expanded: Boolean,
     onDismissRequest: () -> Unit,
     modifier: Modifier = Modifier,
+    minWidth: Dp = 220.dp,
+    maxWidth: Dp = 300.dp,
     content: @Composable ColumnScope.() -> Unit
 ) {
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismissRequest,
-        modifier = modifier.widthIn(min = 220.dp, max = 300.dp),
+        modifier = modifier.widthIn(min = minWidth, max = maxWidth),
         offset = DpOffset(0.dp, 4.dp),
         shape = AxCardShape,
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -56,13 +59,15 @@ fun AxDropdownHeader(text: String, monospace: Boolean = false) {
     )
 }
 
+/** [note]: an optional line under [text] saying what the choice does. */
 @Composable
 fun AxDropdownItem(
     text: String,
     icon: ImageVector,
     onClick: () -> Unit,
     enabled: Boolean = true,
-    destructive: Boolean = false
+    destructive: Boolean = false,
+    note: String? = null
 ) {
     val tint = when {
         !enabled -> MaterialTheme.colorScheme.outline
@@ -71,16 +76,25 @@ fun AxDropdownItem(
     }
     DropdownMenuItem(
         text = {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = when {
-                    !enabled -> MaterialTheme.colorScheme.outline
-                    destructive -> MaterialTheme.colorScheme.error
-                    else -> MaterialTheme.colorScheme.onSurface
+            Column(Modifier.padding(vertical = if (note != null) 6.dp else 0.dp)) {
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = when {
+                        !enabled -> MaterialTheme.colorScheme.outline
+                        destructive -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurface
+                    }
+                )
+                if (note != null) {
+                    Text(
+                        text = note,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
-            )
+            }
         },
         leadingIcon = { IconBadge(imageVector = icon, tint = tint, size = 28.dp) },
         onClick = onClick,
