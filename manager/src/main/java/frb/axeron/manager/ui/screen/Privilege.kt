@@ -255,9 +255,7 @@ private fun PrivilegeAppRow(
     var confirm by remember { mutableStateOf<QuickConfirm?>(null) }
     // Re-read each time the menu opens: the server may have started or stopped meanwhile.
     var serverRunning by remember { mutableStateOf(false) }
-    val launchIntent = remember(app.packageName, disabled) {
-        if (disabled) null else context.packageManager.getLaunchIntentForPackage(app.packageName)
-    }
+    var launchIntent by remember { mutableStateOf<Intent?>(null) }
 
     fun run(label: String, block: suspend () -> PackageControl.Outcome) {
         scope.launch {
@@ -310,6 +308,7 @@ private fun PrivilegeAppRow(
             onClick = onDetails,
             onLongClick = {
                 serverRunning = Axeron.pingBinder()
+                launchIntent = if (disabled) null else context.packageManager.getLaunchIntentForPackage(app.packageName)
                 menu = true
             }
         ) {

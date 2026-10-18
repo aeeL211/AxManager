@@ -9,53 +9,53 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.PlainTooltip
-import androidx.compose.material3.TooltipAnchorPosition
-import androidx.compose.material3.TooltipBox
-import androidx.compose.material3.TooltipDefaults
-import androidx.compose.material3.rememberTooltipState
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -69,21 +69,26 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.ramcosta.composedestinations.DestinationsNavHost
-import com.ramcosta.composedestinations.animations.NavHostAnimatedDestinationStyle
 import com.ramcosta.composedestinations.generated.NavGraphs
 import com.ramcosta.composedestinations.generated.destinations.ActivateScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.FlashScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.HomeScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.PluginScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.PrivilegeScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.QuickShellScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.SettingsScreenDestination
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import com.ramcosta.composedestinations.navigation.dependency
-import com.ramcosta.composedestinations.utils.isRouteOnBackStackAsState
 import com.ramcosta.composedestinations.utils.rememberDestinationsNavigator
+import frb.axeron.manager.ui.screen.HomeScreen
+import frb.axeron.manager.ui.screen.PrivilegeScreen
+import frb.axeron.manager.ui.screen.SettingsScreen
+import frb.axeron.manager.ui.screen.plugin.PluginScreen
+import kotlinx.coroutines.launch
 import frb.axeron.api.AxeronInfo
 import frb.axeron.manager.R
 import frb.axeron.manager.ui.component.FloatingBarFabHost
@@ -252,6 +257,14 @@ class AxActivity : ComponentActivity() {
             )
         }
 
+        val isRootTab = when (currentDestination?.route) {
+            HomeScreenDestination.route,
+            PrivilegeScreenDestination.route,
+            PluginScreenDestination.route,
+            SettingsScreenDestination.route -> true
+            else -> false
+        }
+
         val showBottomBar = when (currentDestination?.route) {
             ActivateScreenDestination.route -> false // Hide for Activate
             FlashScreenDestination.route -> false // Hide for Flash and plugin actions
@@ -262,6 +275,42 @@ class AxActivity : ComponentActivity() {
         var bottomBarHeight by remember { mutableStateOf(0.dp) }
         val fabHost = remember { FloatingBarFabHost() }
 
+        val availableTabs = remember(axeronInfo.isRunning()) {
+            BottomBarDestination.entries.filter { !it.needAxeron || axeronInfo.isRunning() }
+        }
+
+        val pagerState = rememberPagerState(
+            initialPage = 0,
+            pageCount = { availableTabs.size }
+        )
+
+        val scope = rememberCoroutineScope()
+
+        // Sync tab changes from bottom bar clicks or nav controller backstack
+        LaunchedEffect(currentDestination?.route) {
+            val route = currentDestination?.route ?: return@LaunchedEffect
+            val index = availableTabs.indexOfFirst { it.direction.route == route }
+            if (index >= 0 && pagerState.currentPage != index) {
+                pagerState.scrollToPage(index)
+            }
+        }
+
+        // Sync swipe gesture on pager with NavController
+        LaunchedEffect(pagerState) {
+            snapshotFlow { pagerState.currentPage }.collect { page ->
+                val targetTab = availableTabs.getOrNull(page) ?: return@collect
+                if (navController.currentDestination?.route != targetTab.direction.route && isRootTab) {
+                    navigator.navigate(targetTab.direction) {
+                        popUpTo(NavGraphs.root) {
+                            saveState = true
+                        }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                }
+            }
+        }
+
         Box {
             Scaffold(
                 contentWindowInsets = WindowInsets()
@@ -271,61 +320,32 @@ class AxActivity : ComponentActivity() {
                     LocalFloatingBarInset provides if (showBottomBar) bottomBarHeight else 0.dp,
                     LocalFloatingBarFabHost provides fabHost,
                 ) {
-                    DestinationsNavHost(
-                        // Full-bleed content; the floating bar overlays it and each screen adds its own bottom inset.
-                        modifier = Modifier.padding(innerPadding),
-                        navGraph = NavGraphs.root,
-                        navController = navController,
-                        dependenciesContainerBuilder = {
-                            dependency(viewModelGlobal)
-                        },
-                        defaultTransitions = object : NavHostAnimatedDestinationStyle() {
-                            override val enterTransition: AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition
-                                get() = {
-                                    val initialState = initialState.destination.route
-                                    val targetState = targetState.destination.route
-
-                                    // Cari indeks destinasi di BottomBar
-                                    val initialIndex = BottomBarDestination.entries.find { it.direction.route == initialState }?.ordinal ?: -1
-                                    val targetIndex = BottomBarDestination.entries.find { it.direction.route == targetState }?.ordinal ?: -1
-
-                                    if (initialIndex != -1 && targetIndex != -1) {
-                                        // Jika pindah antar tab BottomBar
-                                        if (targetIndex > initialIndex) {
-                                            // Geser ke kiri (masuk dari kanan)
-                                            slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(300)) + fadeIn()
-                                        } else {
-                                            // Geser ke kanan (masuk dari kiri)
-                                            slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(300)) + fadeIn()
-                                        }
-                                    } else {
-                                        // Animasi default jika bukan antar tab (misal masuk ke detail)
-                                        fadeIn(animationSpec = tween(300))
-                                    }
-                                }
-
-                            override val exitTransition: AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition
-                                get() = {
-                                    val initialState = initialState.destination.route
-                                    val targetState = targetState.destination.route
-
-                                    val initialIndex = BottomBarDestination.entries.find { it.direction.route == initialState }?.ordinal ?: -1
-                                    val targetIndex = BottomBarDestination.entries.find { it.direction.route == targetState }?.ordinal ?: -1
-
-                                    if (initialIndex != -1 && targetIndex != -1) {
-                                        if (targetIndex > initialIndex) {
-                                            // Keluar ke kiri
-                                            slideOutHorizontally(targetOffsetX = { -it }, animationSpec = tween(300)) + fadeOut()
-                                        } else {
-                                            // Keluar ke kanan
-                                            slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(300)) + fadeOut()
-                                        }
-                                    } else {
-                                        fadeOut(animationSpec = tween(300))
-                                    }
-                                }
+                    if (isRootTab) {
+                        HorizontalPager(
+                            state = pagerState,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(innerPadding),
+                            userScrollEnabled = true
+                        ) { page ->
+                            when (availableTabs[page]) {
+                                BottomBarDestination.Home -> HomeScreen(navigator = navigator, viewModelGlobal = viewModelGlobal)
+                                BottomBarDestination.Privilege -> PrivilegeScreen(navigator = navigator, viewModelGlobal = viewModelGlobal)
+                                BottomBarDestination.Plugin -> PluginScreen(navigator = navigator, viewModelGlobal = viewModelGlobal)
+                                BottomBarDestination.Settings -> SettingsScreen(navigator = navigator, viewModelGlobal = viewModelGlobal)
+                            }
                         }
-                    )
+                    } else {
+                        DestinationsNavHost(
+                            // Full-bleed content; the floating bar overlays it and each screen adds its own bottom inset.
+                            modifier = Modifier.padding(innerPadding),
+                            navGraph = NavGraphs.root,
+                            navController = navController,
+                            dependenciesContainerBuilder = {
+                                dependency(viewModelGlobal)
+                            }
+                        )
+                    }
                 }
             }
 
@@ -364,10 +384,17 @@ class AxActivity : ComponentActivity() {
                             verticalAlignment = Alignment.Bottom
                         ) {
                             BottomBar(
+                                availableTabs,
+                                pagerState,
                                 navController,
                                 navigator,
-                                activateViewModel.axeronInfo,
+                                isRootTab,
                                 pluginViewModel.pluginUpdateCount,
+                                onTabSelect = { index, destination ->
+                                    scope.launch {
+                                        pagerState.animateScrollToPage(index)
+                                    }
+                                },
                                 // Screens pad for the pill row only (+12dp above and below);
                                 // extra stacked FABs float over content like a normal FAB.
                                 modifier = Modifier.onSizeChanged {
@@ -384,10 +411,13 @@ class AxActivity : ComponentActivity() {
 
     @Composable
     fun BottomBar(
+        availableTabs: List<BottomBarDestination>,
+        pagerState: PagerState,
         navController: NavHostController,
         navigator: DestinationsNavigator,
-        axeronServerInfo: AxeronInfo,
+        isRootTab: Boolean,
         moduleUpdateCount: Int,
+        onTabSelect: (Int, BottomBarDestination) -> Unit,
         modifier: Modifier = Modifier
     ) {
         // Icon-only pill, 56dp tall to match a FAB. Labels show as a tooltip on long-press.
@@ -406,22 +436,22 @@ class AxActivity : ComponentActivity() {
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                BottomBarDestination.entries
-                    .forEach { destination ->
-                        if (!axeronServerInfo.isRunning() && destination.needAxeron) return@forEach
+                availableTabs.forEachIndexed { index, destination ->
+                    val selected = if (isRootTab) {
+                        pagerState.currentPage == index
+                    } else {
+                        navController.currentDestination?.route == destination.direction.route
+                    }
 
-                        val isCurrentDestOnBackStack by navController.isRouteOnBackStackAsState(
-                            destination.direction
-                        )
-                        BottomBarItem(
-                            selected = isCurrentDestOnBackStack,
-                            icon = if (isCurrentDestOnBackStack) destination.iconSelected else destination.iconNotSelected,
-                            label = stringResource(id = destination.labelId),
-                            badgeCount = if (destination == BottomBarDestination.Plugin) moduleUpdateCount else 0,
-                            onClick = {
-                                if (isCurrentDestOnBackStack) {
-                                    navigator.popBackStack(destination.direction, false)
-                                }
+                    BottomBarItem(
+                        selected = selected,
+                        icon = if (selected) destination.iconSelected else destination.iconNotSelected,
+                        label = stringResource(id = destination.labelId),
+                        badgeCount = if (destination == BottomBarDestination.Plugin) moduleUpdateCount else 0,
+                        onClick = {
+                            if (isRootTab) {
+                                onTabSelect(index, destination)
+                            } else {
                                 navigator.navigate(destination.direction) {
                                     popUpTo(NavGraphs.root) {
                                         saveState = true
@@ -430,8 +460,9 @@ class AxActivity : ComponentActivity() {
                                     restoreState = true
                                 }
                             }
-                        )
-                    }
+                        }
+                    )
+                }
             }
         }
     }
