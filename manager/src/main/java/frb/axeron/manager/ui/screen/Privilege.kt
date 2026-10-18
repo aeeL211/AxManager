@@ -22,6 +22,7 @@ import frb.axeron.manager.ui.component.AxSnackBarHost
 import frb.axeron.manager.ui.component.AxPanelShape
 import frb.axeron.manager.ui.component.CountdownConfirmSheet
 import frb.axeron.manager.ui.util.LocalSnackbarHost
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -73,6 +74,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -121,12 +123,34 @@ fun PrivilegeScreen(
     val privilegeViewModel = viewModelGlobal.privilegeViewModel
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(rememberTopAppBarState())
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
 
+    // The list is already in the ViewModel (loaded at startup), so the refresh on entering the tab
+    // can wait until the slide transition has finished. Reloading mid-transition swaps every
+    // PackageInfo and competes with the animation for the main thread. Only an empty list loads now.
     UseLifecycle(
         {
-            privilegeViewModel.loadInstalledApps(false)
+            if (privilegeViewModel.privilegeList.isEmpty()) {
+                privilegeViewModel.loadInstalledApps(false)
+            } else {
+                scope.launch {
+                    delay(TabTransitionSettleMs)
+                    privilegeViewModel.loadInstalledApps(false)
+                }
+            }
         }
     )
+
+    // One lookup for the whole list instead of one per row; the lambda stays stable so rows
+    // are never invalidated by it.
+    val outcomes = outcomeTexts()
+    val latestOutcomes by rememberUpdatedState(outcomes)
+    val outcomeText = remember {
+        { outcome: PackageControl.Outcome, label: String -> latestOutcomes.of(outcome, label) }
+    }
+
+    // Read once: it may be derived (filter + sort) on every access.
+    val apps = privilegeViewModel.privilegeList
 
     var showFilterSheet by remember { mutableStateOf(false) }
     if (showFilterSheet) {
@@ -194,7 +218,7 @@ fun PrivilegeScreen(
                     bottom = paddingValues.calculateBottomPadding() + LocalFloatingBarInset.current + 16.dp
                 )
             ) {
-                if (privilegeViewModel.privilegeList.isEmpty() && !privilegeViewModel.isRefreshing) {
+                if (apps.isEmpty() && !privilegeViewModel.isRefreshing) {
                     item {
                         EmptyState(
                             icon = Icons.Outlined.Lock,
@@ -204,8 +228,9 @@ fun PrivilegeScreen(
                     }
                 }
                 items(
-                    privilegeViewModel.privilegeList,
-                    key = { it.packageName + it.uid }
+                    apps,
+                    key = { it.packageName + it.uid },
+                    contentType = { "app" }
                 ) { app ->
                     PrivilegeAppRow(
                         app = app,
@@ -213,13 +238,17 @@ fun PrivilegeScreen(
                             navigator.navigate(PrivilegeDetailScreenDestination(appInfo = app))
                         },
                         onAccessChange = { privilegeViewModel.setAccess(app.uid, it) },
-                        onPackageChanged = { privilegeViewModel.refreshPackage(app.uid) }
+                        onPackageChanged = { privilegeViewModel.refreshPackage(app.uid) },
+                        outcomeText = outcomeText
                     )
                 }
             }
         }
     }
 }
+
+/** The tab slide is 300 ms (see AxActivity); wait a little longer before heavy work starts. */
+private const val TabTransitionSettleMs = 350L
 
 /** Grayscale, for an app that is disabled. */
 private val DisabledIconFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) })
@@ -236,15 +265,19 @@ private fun PrivilegeAppRow(
     app: AppsViewModel.AppInfo,
     onDetails: () -> Unit,
     onAccessChange: (Access) -> Unit,
-    onPackageChanged: () -> Unit
+    onPackageChanged: () -> Unit,
+    outcomeText: (PackageControl.Outcome, String) -> String
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = LocalSnackbarHost.current
-    val outcomes = outcomeTexts()
+    // A stable memory-cache key: without one the icon is re-resolved from PackageManager every
+    // time a row is composed again (scrolling back, re-entering the tab, a list reload that hands
+    // out fresh PackageInfo objects), which is the slow part. With it, those are cache hits.
     val iconRequest = remember(app.packageInfo) {
         ImageRequest.Builder(context)
             .data(app.packageInfo)
+            .memoryCacheKey("app-icon:${app.packageName}:${app.packageInfo.lastUpdateTime}")
             .crossfade(true)
             .build()
     }
@@ -252,18 +285,20 @@ private fun PrivilegeAppRow(
     val disabled = app.packageInfo.applicationInfo?.enabled == false
     val userId = PackageControl.userIdOf(app.uid)
     var menu by remember { mutableStateOf(false) }
+    // The menu is only composed once the user has long-pressed this row; until then a row is just
+    // the card. After that it stays composed so the dropdown still animates out.
+    var menuComposed by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf<QuickConfirm?>(null) }
-    // Re-read each time the menu opens: the server may have started or stopped meanwhile.
+    // Both are read each time the menu opens: the server may have started or stopped meanwhile,
+    // and getLaunchIntentForPackage is a PackageManager IPC call that must not run per row.
     var serverRunning by remember { mutableStateOf(false) }
-    val launchIntent = remember(app.packageName, disabled) {
-        if (disabled) null else context.packageManager.getLaunchIntentForPackage(app.packageName)
-    }
+    var launchIntent by remember { mutableStateOf<Intent?>(null) }
 
     fun run(label: String, block: suspend () -> PackageControl.Outcome) {
         scope.launch {
             val outcome = block()
             if (outcome.ok) onPackageChanged()
-            snackbar.showSnackbar(outcomes.of(outcome, label))
+            snackbar.showSnackbar(outcomeText(outcome, label))
         }
     }
 
@@ -310,6 +345,9 @@ private fun PrivilegeAppRow(
             onClick = onDetails,
             onLongClick = {
                 serverRunning = Axeron.pingBinder()
+                launchIntent = if (disabled) null
+                else context.packageManager.getLaunchIntentForPackage(app.packageName)
+                menuComposed = true
                 menu = true
             }
         ) {
@@ -362,7 +400,8 @@ private fun PrivilegeAppRow(
 
         // A zero-size anchor at the card's bottom-right corner: the menu opens on the right,
         // under the access label, and the popup shifts left only as far as the screen needs.
-        Box(Modifier.align(Alignment.BottomEnd)) {
+        // Composed on the first long press only (see menuComposed).
+        if (menuComposed) Box(Modifier.align(Alignment.BottomEnd)) {
             AxDropdownMenu(
                 expanded = menu,
                 onDismissRequest = { menu = false },
