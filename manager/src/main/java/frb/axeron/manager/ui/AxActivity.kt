@@ -1,77 +1,62 @@
-package frb.axeron.manager.ui.screen
+package frb.axeron.manager.ui
 
-import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.util.Log
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.foundation.layout.Box
-import androidx.compose.material.icons.outlined.CleaningServices
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.outlined.PlayArrow
-import androidx.compose.material.icons.outlined.PowerSettingsNew
-import androidx.compose.material.icons.outlined.StopCircle
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.ColorMatrix
-import frb.axeron.api.Axeron
-import frb.axeron.manager.data.PackageControl
-import frb.axeron.manager.ui.component.AxDropdownDivider
-import frb.axeron.manager.ui.component.AxDropdownHeader
-import frb.axeron.manager.ui.component.AxDropdownMenu
-import frb.axeron.manager.ui.component.AxSnackBarHost
-import frb.axeron.manager.ui.component.AxPanelShape
-import frb.axeron.manager.ui.component.CountdownConfirmSheet
-import frb.axeron.manager.ui.util.LocalSnackbarHost
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.outlined.Android
-import androidx.compose.material.icons.outlined.Api
-import androidx.compose.material.icons.outlined.Apps
-import androidx.compose.material.icons.outlined.ArrowDownward
-import androidx.compose.material.icons.outlined.ArrowUpward
-import androidx.compose.material.icons.outlined.Block
-import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.DoneAll
-import androidx.compose.material.icons.outlined.FilterList
-import androidx.compose.material.icons.automirrored.outlined.HelpOutline
-import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -81,561 +66,497 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import com.ramcosta.composedestinations.annotation.Destination
-import com.ramcosta.composedestinations.annotation.RootGraph
-import com.ramcosta.composedestinations.generated.destinations.PrivilegeDetailScreenDestination
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import com.ramcosta.composedestinations.DestinationsNavHost
+import com.ramcosta.composedestinations.animations.NavHostAnimatedDestinationStyle
+import com.ramcosta.composedestinations.generated.NavGraphs
+import com.ramcosta.composedestinations.generated.destinations.ActivateScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.FlashScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.HomeScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.QuickShellScreenDestination
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
+import com.ramcosta.composedestinations.navigation.dependency
+import com.ramcosta.composedestinations.utils.isRouteOnBackStackAsState
+import com.ramcosta.composedestinations.utils.rememberDestinationsNavigator
+import frb.axeron.api.AxeronInfo
 import frb.axeron.manager.R
-import frb.axeron.manager.ui.component.AxCard
-import frb.axeron.manager.ui.component.AxOptionsSheet
-import frb.axeron.manager.ui.component.OptionTile
-import frb.axeron.manager.ui.component.OptionTileGrid
-import frb.axeron.manager.ui.component.OptionsSectionHeader
-import frb.axeron.manager.ui.component.OrderToggle
-import frb.axeron.manager.ui.component.AxPullToRefreshBox
-import frb.axeron.manager.ui.component.EmptyState
-import frb.axeron.manager.ui.component.SearchAppBar
-import frb.axeron.manager.ui.component.UseLifecycle
+import frb.axeron.manager.ui.component.FloatingBarFabHost
+import frb.axeron.manager.ui.component.bottomBarFadeBrush
+import frb.axeron.manager.ui.component.FloatingBarFabSlot
+import frb.axeron.manager.ui.component.LocalFloatingBarFabHost
+import frb.axeron.manager.ui.navigation.BottomBarDestination
+import frb.axeron.manager.ui.screen.FlashIt
+import frb.axeron.manager.ui.theme.AxManagerTheme
 import frb.axeron.manager.ui.util.LocalFloatingBarInset
+import frb.axeron.manager.ui.util.LocalSnackbarHost
+import frb.axeron.manager.ui.util.LocaleHelper
+import frb.axeron.manager.ui.viewmodel.ActivateViewModel
 import frb.axeron.manager.ui.viewmodel.AppsViewModel
+import frb.axeron.manager.ui.viewmodel.PluginViewModel
 import frb.axeron.manager.ui.viewmodel.PrivilegeViewModel
-import frb.axeron.manager.ui.viewmodel.PrivilegeViewModel.Access
-import frb.axeron.manager.ui.viewmodel.PrivilegeViewModel.AccessFilter
-import frb.axeron.manager.ui.viewmodel.access
-import frb.axeron.manager.ui.viewmodel.PrivilegeViewModel.AppFilter
+import frb.axeron.manager.ui.viewmodel.SettingsViewModel
 import frb.axeron.manager.ui.viewmodel.ViewModelGlobal
+import frb.axeron.server.PluginInstaller
+import kotlinx.coroutines.delay
+import kotlin.math.abs
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Destination<RootGraph>
-@Composable
-fun PrivilegeScreen(
-    navigator: DestinationsNavigator,
-    viewModelGlobal: ViewModelGlobal
-) {
-    val privilegeViewModel = viewModelGlobal.privilegeViewModel
-    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(rememberTopAppBarState())
-    val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
+class AxActivity : ComponentActivity() {
 
-    // The list is already in the ViewModel (loaded at startup), so the refresh on entering the tab
-    // can wait until the slide transition has finished. Reloading mid-transition swaps every
-    // PackageInfo and competes with the animation for the main thread. Only an empty list loads now.
-    UseLifecycle(
-        {
-            if (privilegeViewModel.privilegeList.isEmpty()) {
-                privilegeViewModel.loadInstalledApps(false)
-            } else {
-                scope.launch {
-                    delay(TabTransitionSettleMs)
-                    privilegeViewModel.loadInstalledApps(false)
+    companion object {
+        const val OPEN_QUICK_SHELL = "AxManager.QUICK_SHELL"
+    }
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(LocaleHelper.applyLanguage(newBase))
+    }
+
+    var zipUri by mutableStateOf<List<PluginInstaller>?>(emptyList())
+
+    val shortcut by lazy {
+        ShortcutInfoCompat.Builder(this, "quick-shell")
+            .setShortLabel(getString(R.string.quick_shell_short))
+            .setLongLabel(getString(R.string.quick_shell))
+            .setDisabledMessage(getString(R.string.quick_shell_not_supported))
+            .setIcon(IconCompat.createWithResource(this, R.drawable.terminal))
+            .setIntent(
+                Intent(this, AxActivity::class.java).apply {
+                    action = OPEN_QUICK_SHELL
+                    flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
                 }
-            }
-        }
-    )
-
-    // One lookup for the whole list instead of one per row; the lambda stays stable so rows
-    // are never invalidated by it.
-    val outcomes = outcomeTexts()
-    val latestOutcomes by rememberUpdatedState(outcomes)
-    val outcomeText = remember {
-        { outcome: PackageControl.Outcome, label: String -> latestOutcomes.of(outcome, label) }
-    }
-
-    // Read once: it may be derived (filter + sort) on every access.
-    val apps = privilegeViewModel.privilegeList
-
-    var showFilterSheet by remember { mutableStateOf(false) }
-    if (showFilterSheet) {
-        PrivilegeFilterSheet(
-            privilegeViewModel = privilegeViewModel,
-            onDismissRequest = { showFilterSheet = false }
-        )
-    }
-
-    Scaffold(
-        snackbarHost = { AxSnackBarHost(LocalSnackbarHost.current) },
-        topBar = {
-            SearchAppBar(
-                title = {
-                    Text(
-                        text = stringResource(R.string.privilege_manager),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                },
-                searchLabel = stringResource(R.string.search_label_apps),
-                searchText = privilegeViewModel.search,
-                onSearchTextChange = { privilegeViewModel.search = it },
-                onClearClick = { privilegeViewModel.search = "" },
-                action = {
-                    IconButton(onClick = { showFilterSheet = true }) {
-                        // A dot marks that the list is filtered/sorted differently from the default.
-                        BadgedBox(
-                            badge = {
-                                if (!privilegeViewModel.isFilterDefault) Badge()
-                            }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.FilterList,
-                                contentDescription = stringResource(R.string.filter_settings)
-                            )
-                        }
-                    }
-                },
-                scrollBehavior = scrollBehavior,
-//                onBackClick = {
-//                    navigator.popBackStack()
-//                },
             )
-        }
-    ) { paddingValues ->
-        AxPullToRefreshBox(
-            isRefreshing = privilegeViewModel.isRefreshing,
-            onRefresh = {
-                privilegeViewModel.loadInstalledApps()
-            },
-            topInset = paddingValues.calculateTopPadding()
-        ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .nestedScroll(scrollBehavior.nestedScrollConnection),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                // Scroll under the fading top bar and clear the floating bar.
-                contentPadding = PaddingValues(
-                    start = 16.dp,
-                    top = paddingValues.calculateTopPadding() + 10.dp,
-                    end = 16.dp,
-                    bottom = paddingValues.calculateBottomPadding() + LocalFloatingBarInset.current + 16.dp
-                )
-            ) {
-                if (apps.isEmpty() && !privilegeViewModel.isRefreshing) {
-                    item {
-                        EmptyState(
-                            icon = Icons.Outlined.Lock,
-                            title = stringResource(R.string.privilege_empty_title),
-                            subtitle = stringResource(R.string.privilege_empty_desc)
-                        )
-                    }
-                }
-                items(
-                    apps,
-                    key = { it.packageName + it.uid },
-                    contentType = { "app" }
-                ) { app ->
-                    PrivilegeAppRow(
-                        app = app,
-                        onDetails = {
-                            navigator.navigate(PrivilegeDetailScreenDestination(appInfo = app))
-                        },
-                        onAccessChange = { privilegeViewModel.setAccess(app.uid, it) },
-                        onPackageChanged = { privilegeViewModel.refreshPackage(app.uid) },
-                        outcomeText = outcomeText
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** The tab slide is 300 ms (see AxActivity); wait a little longer before heavy work starts. */
-private const val TabTransitionSettleMs = 350L
-
-/** Grayscale, for an app that is disabled. */
-private val DisabledIconFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) })
-
-/** What the quick menu asks to confirm first: both lose state the user may care about. */
-private enum class QuickConfirm { FORCE_STOP, DISABLE }
-
-/**
- * One app. A tap opens its details; a long press opens a quick menu at the right: the Axeron
- * permission, open, clear cache, force stop and enable/disable. A disabled app is in grayscale.
- */
-@Composable
-private fun PrivilegeAppRow(
-    app: AppsViewModel.AppInfo,
-    onDetails: () -> Unit,
-    onAccessChange: (Access) -> Unit,
-    onPackageChanged: () -> Unit,
-    outcomeText: (PackageControl.Outcome, String) -> String
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val snackbar = LocalSnackbarHost.current
-    // A stable memory-cache key: without one the icon is re-resolved from PackageManager every
-    // time a row is composed again (scrolling back, re-entering the tab, a list reload that hands
-    // out fresh PackageInfo objects), which is the slow part. With it, those are cache hits.
-    val iconRequest = remember(app.packageInfo) {
-        ImageRequest.Builder(context)
-            .data(app.packageInfo)
-            .memoryCacheKey("app-icon:${app.packageName}:${app.packageInfo.lastUpdateTime}")
-            .crossfade(true)
             .build()
     }
 
-    val disabled = app.packageInfo.applicationInfo?.enabled == false
-    val userId = PackageControl.userIdOf(app.uid)
-    var menu by remember { mutableStateOf(false) }
-    // The menu is only composed once the user has long-pressed this row; until then a row is just
-    // the card. After that it stays composed so the dropdown still animates out.
-    var menuComposed by remember { mutableStateOf(false) }
-    var confirm by remember { mutableStateOf<QuickConfirm?>(null) }
-    // Both are read each time the menu opens: the server may have started or stopped meanwhile,
-    // and getLaunchIntentForPackage is a PackageManager IPC call that must not run per row.
-    var serverRunning by remember { mutableStateOf(false) }
-    var launchIntent by remember { mutableStateOf<Intent?>(null) }
+    private var intentState: Intent? by mutableStateOf(null)
 
-    fun run(label: String, block: suspend () -> PackageControl.Outcome) {
-        scope.launch {
-            val outcome = block()
-            if (outcome.ok) onPackageChanged()
-            snackbar.showSnackbar(outcomeText(outcome, label))
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+
+        ShortcutManagerCompat.pushDynamicShortcut(this@AxActivity, shortcut)
+
+        // Only a fresh start: after a recreate (rotation, theme change) the intent was already
+        // handled, and handling a VIEW again would flash the same zip a second time.
+        if (savedInstanceState == null) intentState = intent
+
+        setContent {
+            AxManagerTheme {
+                MainScreen(it)
+            }
         }
     }
 
-    val forceStopLabel = stringResource(R.string.privilege_force_stop)
-    val clearCacheLabel = stringResource(R.string.privilege_clear_cache)
-    val disableLabel = stringResource(R.string.privilege_disable_app)
-    val enableLabel = stringResource(R.string.privilege_enable_app)
-
-    val subject: @Composable () -> Unit = {
-        AppChip(iconRequest = iconRequest, label = app.label, packageName = app.packageName)
-    }
-    when (confirm) {
-        QuickConfirm.FORCE_STOP -> CountdownConfirmSheet(
-            title = forceStopLabel,
-            message = stringResource(R.string.privilege_force_stop_desc, app.label),
-            confirmLabel = forceStopLabel,
-            icon = Icons.Outlined.StopCircle,
-            destructive = false,
-            subject = subject,
-            onConfirm = {
-                confirm = null
-                run(forceStopLabel) { PackageControl.forceStop(app.packageName, userId) }
-            },
-            onDismissRequest = { confirm = null }
-        )
-        QuickConfirm.DISABLE -> CountdownConfirmSheet(
-            title = disableLabel,
-            message = stringResource(R.string.privilege_disable_app_desc, app.label),
-            confirmLabel = disableLabel,
-            icon = Icons.Outlined.Block,
-            subject = subject,
-            onConfirm = {
-                confirm = null
-                run(disableLabel) { PackageControl.setEnabled(app.packageName, userId, false) }
-            },
-            onDismissRequest = { confirm = null }
-        )
-        null -> Unit
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intentState = intent
+        Log.i("AxActivity", "onNewIntent")
     }
 
-    Box {
-        // The right side stays tight so labels get room.
-        AxCard(
-            onClick = onDetails,
-            onLongClick = {
-                serverRunning = Axeron.pingBinder()
-                launchIntent = if (disabled) null
-                else context.packageManager.getLaunchIntentForPackage(app.packageName)
-                menuComposed = true
-                menu = true
+    @Composable
+    fun MainScreen(settingsViewModel: SettingsViewModel) {
+        val snackBarHostState = remember { SnackbarHostState() }
+        val navController = rememberNavController()
+        val navigator = navController.rememberDestinationsNavigator()
+        val currentDestination = navController.currentBackStackEntryAsState().value?.destination
+
+        val activateViewModel: ActivateViewModel = viewModel<ActivateViewModel>()
+
+        val appsViewModel: AppsViewModel = viewModel<AppsViewModel>()
+        val privilegeViewModel: PrivilegeViewModel = viewModel<PrivilegeViewModel>()
+        val pluginViewModel: PluginViewModel = viewModel<PluginViewModel>()
+
+        val axeronInfo = activateViewModel.axeronInfo
+
+        LaunchedEffect(intentState) {
+            if (intentState == null) return@LaunchedEffect
+            Log.i("AxActivity", "intent: $intentState")
+            when (intentState!!.action) {
+                OPEN_QUICK_SHELL -> {
+                    if (axeronInfo.isRunning()) {
+                        navigator.navigate(HomeScreenDestination()) {
+                            popUpTo(NavGraphs.root) {
+                                saveState = true
+                            }
+                        }
+                        if (navController.currentDestination?.route == HomeScreenDestination.route) {
+                            navigator.navigate(QuickShellScreenDestination())
+                        }
+                    }
+                }
+
+                Intent.ACTION_VIEW -> {
+                    // The intent being handled: with singleTask a VIEW often arrives through
+                    // onNewIntent, while `intent` is still the one that first created the activity.
+                    val view = intentState!!
+                    if (view.data?.scheme == "content") {
+                        zipUri =
+                            view.data?.let { uri ->
+                                arrayListOf(PluginInstaller(uri))
+                            } ?: run {
+                                val uris: ArrayList<Uri>? =
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        view.getParcelableArrayListExtra("uris", Uri::class.java)
+                                    } else {
+                                        @Suppress("DEPRECATION")
+                                        view.getParcelableArrayListExtra("uris")
+                                    }
+
+                                uris
+                                    ?.map { PluginInstaller(it) }
+                                    ?.toCollection(arrayListOf())
+                                    ?: arrayListOf()
+                            }
+                        if (!zipUri.isNullOrEmpty()) {
+                            navigator.navigate(
+                                FlashScreenDestination(
+                                    flashIt = FlashIt.FlashPlugins(zipUri!!)
+                                )
+                            )
+                            zipUri = null
+                        }
+                    }
+                }
             }
+
+            intentState = null
+        }
+
+        // Reload only when the server process changes, not on every AxeronInfo emission.
+        val serverProcess = axeronInfo.serverInfo.uid to axeronInfo.serverInfo.pid
+        LaunchedEffect(serverProcess) {
+            if (axeronInfo.isRunning()) {
+                // pluginViewModel is prioritized because of BottomBar badge
+                pluginViewModel.fetchModuleList()
+
+                // Stagger other loads to avoid UI stutter during startup/navigation
+                delay(500)
+                appsViewModel.loadInstalledApps()
+
+                delay(500)
+                privilegeViewModel.loadInstalledApps()
+            }
+        }
+
+        val viewModelGlobal = remember {
+            ViewModelGlobal(
+                settingsViewModel = settingsViewModel,
+                appsViewModel = appsViewModel,
+                activateViewModel = activateViewModel,
+                pluginViewModel = pluginViewModel,
+                privilegeViewModel = privilegeViewModel
+            )
+        }
+
+        val showBottomBar = when (currentDestination?.route) {
+            ActivateScreenDestination.route -> false // Hide for Activate
+            FlashScreenDestination.route -> false // Hide for Flash and plugin actions
+            else -> true
+        }
+
+        // Tabs reachable right now: the same filter the BottomBar applies, so a swipe never lands
+        // on a tab the pill is not showing (e.g. Axeron-only tabs while the server is stopped).
+        val isServerRunning = axeronInfo.isRunning()
+        val visibleTabs = remember(isServerRunning) {
+            BottomBarDestination.entries.filter { isServerRunning || !it.needAxeron }
+        }
+        val currentTabIndex = visibleTabs.indexOfFirst { it.direction.route == currentDestination?.route }
+
+        // Swipe only on a tab screen itself: a detail screen on top (or Activate/Flash) keeps its
+        // own gestures and back behaviour.
+        val swipeModifier = rememberTabSwipeModifier(
+            enabled = showBottomBar && currentTabIndex != -1
+        ) { direction ->
+            val target = visibleTabs.getOrNull(currentTabIndex + direction)
+            // Ignore swipes while the previous tab transition is still running.
+            val settled =
+                navController.currentBackStackEntry?.lifecycle?.currentState == Lifecycle.State.RESUMED
+            if (target != null && settled) navigator.navigateToTab(target)
+        }
+
+        val density = LocalDensity.current
+        var bottomBarHeight by remember { mutableStateOf(0.dp) }
+        val fabHost = remember { FloatingBarFabHost() }
+
+        Box {
+            Scaffold(
+                contentWindowInsets = WindowInsets()
+            ) { innerPadding ->
+                CompositionLocalProvider(
+                    LocalSnackbarHost provides snackBarHostState,
+                    LocalFloatingBarInset provides if (showBottomBar) bottomBarHeight else 0.dp,
+                    LocalFloatingBarFabHost provides fabHost,
+                ) {
+                    DestinationsNavHost(
+                        // Full-bleed content; the floating bar overlays it and each screen adds its own bottom inset.
+                        modifier = Modifier
+                            .then(swipeModifier)
+                            .padding(innerPadding),
+                        navGraph = NavGraphs.root,
+                        navController = navController,
+                        dependenciesContainerBuilder = {
+                            dependency(viewModelGlobal)
+                        },
+                        defaultTransitions = object : NavHostAnimatedDestinationStyle() {
+                            override val enterTransition: AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition
+                                get() = {
+                                    val initialState = initialState.destination.route
+                                    val targetState = targetState.destination.route
+
+                                    // Cari indeks destinasi di BottomBar
+                                    val initialIndex = BottomBarDestination.entries.find { it.direction.route == initialState }?.ordinal ?: -1
+                                    val targetIndex = BottomBarDestination.entries.find { it.direction.route == targetState }?.ordinal ?: -1
+
+                                    if (initialIndex != -1 && targetIndex != -1) {
+                                        // Jika pindah antar tab BottomBar
+                                        if (targetIndex > initialIndex) {
+                                            // Geser ke kiri (masuk dari kanan)
+                                            slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(300)) + fadeIn()
+                                        } else {
+                                            // Geser ke kanan (masuk dari kiri)
+                                            slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(300)) + fadeIn()
+                                        }
+                                    } else {
+                                        // Animasi default jika bukan antar tab (misal masuk ke detail)
+                                        fadeIn(animationSpec = tween(300))
+                                    }
+                                }
+
+                            override val exitTransition: AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition
+                                get() = {
+                                    val initialState = initialState.destination.route
+                                    val targetState = targetState.destination.route
+
+                                    val initialIndex = BottomBarDestination.entries.find { it.direction.route == initialState }?.ordinal ?: -1
+                                    val targetIndex = BottomBarDestination.entries.find { it.direction.route == targetState }?.ordinal ?: -1
+
+                                    if (initialIndex != -1 && targetIndex != -1) {
+                                        if (targetIndex > initialIndex) {
+                                            // Keluar ke kiri
+                                            slideOutHorizontally(targetOffsetX = { -it }, animationSpec = tween(300)) + fadeOut()
+                                        } else {
+                                            // Keluar ke kanan
+                                            slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(300)) + fadeOut()
+                                        }
+                                    } else {
+                                        fadeOut(animationSpec = tween(300))
+                                    }
+                                }
+                        }
+                    )
+                }
+            }
+
+            AnimatedVisibility(
+                visible = showBottomBar,
+                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                CompositionLocalProvider(LocalSnackbarHost provides snackBarHostState) {
+                    val navBarInset =
+                        WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.BottomCenter
+                    ) {
+                        // Soft fade behind the pill, down through the system nav bar, mirroring
+                        // the top bar's gradient. Sized from the pill row only, so FABs stacking
+                        // up (e.g. re-ignite) never resize it.
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(bottomBarHeight + navBarInset)
+                                .background(bottomBarFadeBrush(MaterialTheme.colorScheme.background))
+                        )
+
+                        // Pill and the page's FABs form one centered group on a shared bottom
+                        // baseline. No animateContentSize here: it lays content out from the top,
+                        // which made the bottom-anchored pill jump whenever the FAB stack resized.
+                        // The FAB slot animates its own width, so the pill glides to re-center.
+                        Row(
+                            modifier = Modifier
+                                .navigationBarsPadding()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.Bottom
+                        ) {
+                            BottomBar(
+                                navController,
+                                navigator,
+                                activateViewModel.axeronInfo,
+                                pluginViewModel.pluginUpdateCount,
+                                // Screens pad for the pill row only (+12dp above and below);
+                                // extra stacked FABs float over content like a normal FAB.
+                                modifier = Modifier.onSizeChanged {
+                                    bottomBarHeight = with(density) { it.height.toDp() } + 24.dp
+                                }
+                            )
+                            FloatingBarFabSlot(fabHost)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    fun BottomBar(
+        navController: NavHostController,
+        navigator: DestinationsNavigator,
+        axeronServerInfo: AxeronInfo,
+        moduleUpdateCount: Int,
+        modifier: Modifier = Modifier
+    ) {
+        // Icon-only pill, 56dp tall to match a FAB. Labels show as a tooltip on long-press.
+        Surface(
+            modifier = modifier,
+            shape = CircleShape,
+            // Tonal secondary so the bar stands apart from the surfaceContainerHigh cards behind it.
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            shadowElevation = 8.dp
         ) {
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 14.dp, end = 8.dp, top = 12.dp, bottom = 12.dp)
-                    .alpha(if (disabled) 0.6f else 1f),
+                    .padding(6.dp)
+                    .animateContentSize(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                AsyncImage(
-                    model = iconRequest,
-                    contentDescription = app.label,
-                    colorFilter = if (disabled) DisabledIconFilter else null,
-                    modifier = Modifier.size(44.dp)
-                )
-                Spacer(Modifier.width(14.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = app.label,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = if (disabled) {
-                            stringResource(R.string.privilege_disabled_tag, app.packageName)
-                        } else app.packageName,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = stringResource(app.access.labelId()),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = app.access.color()
-                )
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
+                BottomBarDestination.entries
+                    .forEach { destination ->
+                        if (!axeronServerInfo.isRunning() && destination.needAxeron) return@forEach
 
-        // A zero-size anchor at the card's bottom-right corner: the menu opens on the right,
-        // under the access label, and the popup shifts left only as far as the screen needs.
-        // Composed on the first long press only (see menuComposed).
-        if (menuComposed) Box(Modifier.align(Alignment.BottomEnd)) {
-            AxDropdownMenu(
-                expanded = menu,
-                onDismissRequest = { menu = false },
-                minWidth = 260.dp,
-                maxWidth = 340.dp
-            ) {
-                AxDropdownHeader(app.label)
-                Box(Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
-                    AccessOptions(
-                        access = app.access,
-                        enabled = serverRunning,
-                        onSelect = {
-                            menu = false
-                            onAccessChange(it)
-                        }
-                    )
-                }
-                AxDropdownDivider()
-                // Icon-only actions in one row; each says what it is to TalkBack.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    QuickIconAction(
-                        icon = Icons.Outlined.PlayArrow,
-                        label = stringResource(R.string.privilege_launch),
-                        enabled = launchIntent != null
-                    ) {
-                        menu = false
-                        val intent = launchIntent ?: return@QuickIconAction
-                        try {
-                            context.startActivity(Intent(intent).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                        } catch (_: ActivityNotFoundException) {
-                            scope.launch {
-                                snackbar.showSnackbar(context.getString(R.string.privilege_launch_failed, app.label))
+                        val isCurrentDestOnBackStack by navController.isRouteOnBackStackAsState(
+                            destination.direction
+                        )
+                        BottomBarItem(
+                            selected = isCurrentDestOnBackStack,
+                            icon = if (isCurrentDestOnBackStack) destination.iconSelected else destination.iconNotSelected,
+                            label = stringResource(id = destination.labelId),
+                            badgeCount = if (destination == BottomBarDestination.Plugin) moduleUpdateCount else 0,
+                            onClick = {
+                                if (isCurrentDestOnBackStack) {
+                                    navigator.popBackStack(destination.direction, false)
+                                }
+                                navigator.navigateToTab(destination)
                             }
-                        }
+                        )
                     }
-                    QuickIconAction(
-                        icon = Icons.Outlined.CleaningServices,
-                        label = clearCacheLabel,
-                        enabled = serverRunning
-                    ) {
-                        menu = false
-                        run(clearCacheLabel) { PackageControl.clearCache(app.packageName, userId) }
+            }
+        }
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    private fun BottomBarItem(
+        selected: Boolean,
+        icon: ImageVector,
+        label: String,
+        badgeCount: Int,
+        onClick: () -> Unit
+    ) {
+        val containerColor by animateColorAsState(
+            targetValue = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
+            label = "navItemContainer"
+        )
+        val contentColor by animateColorAsState(
+            targetValue = if (selected) {
+                MaterialTheme.colorScheme.onPrimary
+            } else {
+                MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.75f)
+            },
+            label = "navItemContent"
+        )
+
+        TooltipBox(
+            positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+            tooltip = { PlainTooltip { Text(label) } },
+            state = rememberTooltipState()
+        ) {
+            Box(
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(containerColor)
+                    .clickable(onClick = onClick)
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                if (badgeCount > 0) {
+                    BadgedBox(badge = { Badge { Text(badgeCount.toString()) } }) {
+                        Icon(imageVector = icon, contentDescription = label, tint = contentColor)
                     }
-                    QuickIconAction(
-                        icon = Icons.Outlined.StopCircle,
-                        label = forceStopLabel,
-                        enabled = serverRunning
-                    ) {
-                        menu = false
-                        confirm = QuickConfirm.FORCE_STOP
-                    }
-                    QuickIconAction(
-                        icon = Icons.Outlined.PowerSettingsNew,
-                        label = if (disabled) enableLabel else disableLabel,
-                        enabled = serverRunning,
-                        destructive = !disabled
-                    ) {
-                        menu = false
-                        // Enabling gives nothing up, so only disabling asks first.
-                        if (disabled) {
-                            run(enableLabel) { PackageControl.setEnabled(app.packageName, userId, true) }
-                        } else {
-                            confirm = QuickConfirm.DISABLE
-                        }
-                    }
+                } else {
+                    Icon(imageVector = icon, contentDescription = label, tint = contentColor)
                 }
             }
         }
     }
 }
 
-/** One action of the quick menu's icon row; [label] is what TalkBack says. */
-@Composable
-private fun QuickIconAction(
-    icon: ImageVector,
-    label: String,
-    enabled: Boolean,
-    destructive: Boolean = false,
-    onClick: () -> Unit
-) {
-    FilledTonalIconButton(
-        onClick = onClick,
-        enabled = enabled,
-        colors = if (destructive) {
-            IconButtonDefaults.filledTonalIconButtonColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer,
-                contentColor = MaterialTheme.colorScheme.onErrorContainer
-            )
-        } else IconButtonDefaults.filledTonalIconButtonColors()
-    ) {
-        Icon(imageVector = icon, contentDescription = label)
+/** Same navigation the pill performs on tap, shared so a swipe behaves identically. */
+private fun DestinationsNavigator.navigateToTab(destination: BottomBarDestination) {
+    navigate(destination.direction) {
+        popUpTo(NavGraphs.root) {
+            saveState = true
+        }
+        launchSingleTop = true
+        restoreState = true
     }
 }
+
+/** A slow drag has to cover this much to count as a swipe. */
+private val SwipeDistance = 80.dp
+
+/** A quick flick only needs this much travel... */
+private val SwipeFlingMinDistance = 24.dp
+
+/** ...as long as it is at least this fast (per second). */
+private val SwipeFlingVelocity = 700.dp
 
 /**
- * Allowed / Ask / Denied as a column of radio options, in the style of the app-op mode picker.
- * [withDescriptions] adds what each does (the detail sheet); the quick menu keeps to the names.
+ * Horizontal swipe between tabs. [onSwipe] gets +1 for a swipe to the left (next tab) and -1 for a
+ * swipe to the right (previous tab). Built on `draggable`, so anything inside that scrolls or drags
+ * horizontally on its own (rows, sliders, pagers) consumes the gesture first and wins, and taps and
+ * vertical scrolling are untouched.
  */
 @Composable
-internal fun AccessOptions(
-    access: Access,
-    onSelect: (Access) -> Unit,
-    enabled: Boolean = true,
-    withDescriptions: Boolean = false
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(if (withDescriptions) 6.dp else 4.dp)) {
-        Access.entries.forEach { option ->
-            val selected = option == access
-            Surface(
-                onClick = { if (!selected) onSelect(option) },
-                enabled = enabled,
-                shape = AxPanelShape,
-                color = if (selected) MaterialTheme.colorScheme.primaryContainer
-                else MaterialTheme.colorScheme.surfaceContainerHighest,
-                modifier = Modifier.alpha(if (enabled) 1f else 0.5f)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(end = 12.dp, top = 2.dp, bottom = 2.dp)
-                ) {
-                    RadioButton(
-                        selected = selected,
-                        enabled = enabled,
-                        onClick = { if (!selected) onSelect(option) }
-                    )
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = stringResource(option.labelId()),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        if (withDescriptions) {
-                            Text(
-                                text = stringResource(option.descriptionId()),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
+private fun rememberTabSwipeModifier(
+    enabled: Boolean,
+    onSwipe: (direction: Int) -> Unit
+): Modifier {
+    val density = LocalDensity.current
+    val currentOnSwipe by rememberUpdatedState(onSwipe)
+    // Only read inside the drag callbacks, so updating it never triggers a recomposition.
+    var dragged by remember { mutableFloatStateOf(0f) }
+
+    return Modifier.draggable(
+        state = rememberDraggableState { dragged += it },
+        orientation = Orientation.Horizontal,
+        enabled = enabled,
+        onDragStarted = { dragged = 0f },
+        onDragStopped = { velocity ->
+            val distance = abs(dragged)
+            val byDistance = distance >= with(density) { SwipeDistance.toPx() }
+            val byFling = distance >= with(density) { SwipeFlingMinDistance.toPx() } &&
+                abs(velocity) >= with(density) { SwipeFlingVelocity.toPx() }
+            if (byDistance || byFling) {
+                val towards = if (byFling) velocity else dragged
+                currentOnSwipe(if (towards < 0f) 1 else -1)
             }
+            dragged = 0f
         }
-    }
-}
-
-@Composable
-private fun PrivilegeFilterSheet(
-    privilegeViewModel: PrivilegeViewModel,
-    onDismissRequest: () -> Unit
-) {
-    val counts = privilegeViewModel.filterCounts
-
-    AxOptionsSheet(
-        title = stringResource(R.string.filter_settings),
-        description = stringResource(R.string.privilege_filter_desc),
-        onDismissRequest = onDismissRequest,
-        headerAction = {
-            TextButton(
-                enabled = !privilegeViewModel.isFilterDefault,
-                onClick = privilegeViewModel::resetFilter
-            ) {
-                Text(stringResource(R.string.reset))
-            }
-        }
-    ) {
-        OptionsSectionHeader(stringResource(R.string.privilege_filter_show))
-        OptionTileGrid(
-            items = listOf(
-                Triple(AppFilter.INSTALLED, Icons.Outlined.Apps, R.string.privilege_filter_installed),
-                Triple(AppFilter.SYSTEM, Icons.Outlined.Android, R.string.privilege_filter_system),
-                Triple(AppFilter.SHIZUKU, Icons.Outlined.Api, R.string.privilege_filter_shizuku)
-            )
-        ) { (filter, icon, labelId), modifier ->
-            OptionTile(
-                modifier = modifier,
-                icon = icon,
-                label = stringResource(labelId),
-                subtitle = stringResource(R.string.privilege_filter_count, counts[filter] ?: 0),
-                selected = privilegeViewModel.filter == filter,
-                onClick = { privilegeViewModel.updateFilter(filter) }
-            )
-        }
-
-        val accessCounts = privilegeViewModel.accessCounts
-        OptionsSectionHeader(stringResource(R.string.privilege_filter_access))
-        OptionTileGrid(
-            items = listOf(
-                Triple(AccessFilter.ALL, Icons.Outlined.DoneAll, R.string.privilege_filter_all),
-                Triple(AccessFilter.ALLOWED, Icons.Outlined.CheckCircle, R.string.privilege_access_allowed),
-                Triple(AccessFilter.ASK, Icons.AutoMirrored.Outlined.HelpOutline, R.string.privilege_access_ask),
-                Triple(AccessFilter.DENIED, Icons.Outlined.Block, R.string.privilege_access_denied)
-            ),
-            columns = 2
-        ) { (access, icon, labelId), modifier ->
-            OptionTile(
-                modifier = modifier,
-                icon = icon,
-                label = stringResource(labelId),
-                subtitle = stringResource(R.string.privilege_filter_count, accessCounts[access] ?: 0),
-                selected = privilegeViewModel.access == access,
-                onClick = { privilegeViewModel.updateAccess(access) }
-            )
-        }
-
-        OptionsSectionHeader(stringResource(R.string.sort_order))
-        OrderToggle(
-            ascending = privilegeViewModel.ascending,
-            onChange = privilegeViewModel::updateAscending
-        )
-    }
-}
-
-/** "Allowed" / "Ask (default)" / "Denied", as the list and the detail screen show it. */
-internal fun Access.labelId(): Int = when (this) {
-    Access.ALLOWED -> R.string.privilege_access_allowed
-    Access.ASK -> R.string.privilege_access_ask
-    Access.DENIED -> R.string.privilege_access_denied
-}
-
-/** What the server does when the app asks, for the detail screen. */
-internal fun Access.descriptionId(): Int = when (this) {
-    Access.ALLOWED -> R.string.privilege_access_allowed_desc
-    Access.ASK -> R.string.privilege_access_ask_desc
-    Access.DENIED -> R.string.privilege_access_denied_desc
-}
-
-@Composable
-internal fun Access.color(): Color = when (this) {
-    Access.ALLOWED -> MaterialTheme.colorScheme.primary
-    Access.ASK -> MaterialTheme.colorScheme.onSurfaceVariant
-    Access.DENIED -> MaterialTheme.colorScheme.error
+    )
 }
