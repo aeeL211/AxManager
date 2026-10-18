@@ -15,6 +15,9 @@ import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -56,15 +59,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -109,7 +116,9 @@ import frb.axeron.manager.ui.viewmodel.PrivilegeViewModel
 import frb.axeron.manager.ui.viewmodel.SettingsViewModel
 import frb.axeron.manager.ui.viewmodel.ViewModelGlobal
 import frb.axeron.server.PluginInstaller
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 class AxActivity : ComponentActivity() {
@@ -275,15 +284,19 @@ class AxActivity : ComponentActivity() {
 
         // Swipe only on a tab screen itself: a detail screen on top (or Activate/Flash) keeps its
         // own gestures and back behaviour.
+        val tabSwipe = remember { TabSwipeState() }
         val swipeModifier = rememberTabSwipeModifier(
-            enabled = showBottomBar && currentTabIndex != -1
-        ) { direction ->
-            val target = visibleTabs.getOrNull(currentTabIndex + direction)
-            // Ignore swipes while the previous tab transition is still running.
-            val settled =
+            state = tabSwipe,
+            enabled = showBottomBar && currentTabIndex != -1,
+            canSwipe = { direction -> visibleTabs.getOrNull(currentTabIndex + direction) != null },
+            // Ignore a commit while the previous tab transition is still running.
+            isSettled = {
                 navController.currentBackStackEntry?.lifecycle?.currentState == Lifecycle.State.RESUMED
-            if (target != null && settled) navigator.navigateToTab(target)
-        }
+            },
+            onSwipe = { direction ->
+                visibleTabs.getOrNull(currentTabIndex + direction)?.let { navigator.navigateToTab(it) }
+            }
+        )
 
         val density = LocalDensity.current
         var bottomBarHeight by remember { mutableStateOf(0.dp) }
@@ -300,8 +313,11 @@ class AxActivity : ComponentActivity() {
                 ) {
                     DestinationsNavHost(
                         // Full-bleed content; the floating bar overlays it and each screen adds its own bottom inset.
+                        // draggable stays put (outer); only the page inside it follows the finger,
+                        // through a draw-phase translation, so dragging never recomposes anything.
                         modifier = Modifier
                             .then(swipeModifier)
+                            .graphicsLayer { translationX = tabSwipe.offsetX }
                             .padding(innerPadding),
                         navGraph = NavGraphs.root,
                         navController = navController,
@@ -322,10 +338,10 @@ class AxActivity : ComponentActivity() {
                                         // Jika pindah antar tab BottomBar
                                         if (targetIndex > initialIndex) {
                                             // Geser ke kiri (masuk dari kanan)
-                                            slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(300)) + fadeIn()
+                                            slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(TabTransitionMs))
                                         } else {
                                             // Geser ke kanan (masuk dari kiri)
-                                            slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(300)) + fadeIn()
+                                            slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(TabTransitionMs))
                                         }
                                     } else {
                                         // Animasi default jika bukan antar tab (misal masuk ke detail)
@@ -344,10 +360,10 @@ class AxActivity : ComponentActivity() {
                                     if (initialIndex != -1 && targetIndex != -1) {
                                         if (targetIndex > initialIndex) {
                                             // Keluar ke kiri
-                                            slideOutHorizontally(targetOffsetX = { -it }, animationSpec = tween(300)) + fadeOut()
+                                            slideOutHorizontally(targetOffsetX = { -it }, animationSpec = tween(TabTransitionMs))
                                         } else {
                                             // Keluar ke kanan
-                                            slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(300)) + fadeOut()
+                                            slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(TabTransitionMs))
                                         }
                                     } else {
                                         fadeOut(animationSpec = tween(300))
@@ -517,8 +533,11 @@ private fun DestinationsNavigator.navigateToTab(destination: BottomBarDestinatio
     }
 }
 
-/** A slow drag has to cover this much to count as a swipe. */
-private val SwipeDistance = 80.dp
+/** Duration of a tab slide. The swipe release animation uses the same value so the two stay in step. */
+private const val TabTransitionMs = 300
+
+/** A slow drag has to be released past this to count as a swipe. */
+private val SwipeDistance = 96.dp
 
 /** A quick flick only needs this much travel... */
 private val SwipeFlingMinDistance = 24.dp
@@ -526,37 +545,97 @@ private val SwipeFlingMinDistance = 24.dp
 /** ...as long as it is at least this fast (per second). */
 private val SwipeFlingVelocity = 700.dp
 
+/** Past the first/last tab the page follows the finger at this fraction, so it feels like an edge. */
+private const val SwipeEdgeResistance = 0.3f
+
+@Stable
+private class TabSwipeState {
+    /** Horizontal offset of the page. Only read while drawing (graphicsLayer): no recomposition. */
+    var offsetX by mutableFloatStateOf(0f)
+
+    /** True from the moment a swipe commits until its release animation has finished. */
+    var committed = false
+
+    var settleJob: Job? = null
+}
+
 /**
- * Horizontal swipe between tabs. [onSwipe] gets +1 for a swipe to the left (next tab) and -1 for a
- * swipe to the right (previous tab). Built on `draggable`, so anything inside that scrolls or drags
- * horizontally on its own (rows, sliders, pagers) consumes the gesture first and wins, and taps and
- * vertical scrolling are untouched.
+ * Swipe between tabs, with the page following the finger.
+ *
+ * While dragging, [TabSwipeState.offsetX] moves the page. On release past the threshold the usual
+ * tab slide runs, and the offset eases from where the finger let go to 0 over the same duration.
+ * Old and new page are then still edge to edge (the new one enters at width + offset), so the
+ * motion continues from the finger instead of restarting. Short of the threshold the page springs
+ * back. [onSwipe] gets +1 for the next tab (swipe left) and -1 for the previous (swipe right).
+ *
+ * Built on `draggable`: anything inside that scrolls or drags horizontally itself consumes the
+ * gesture first and wins; taps and vertical scrolling are untouched.
  */
 @Composable
 private fun rememberTabSwipeModifier(
+    state: TabSwipeState,
     enabled: Boolean,
+    canSwipe: (direction: Int) -> Boolean,
+    isSettled: () -> Boolean,
     onSwipe: (direction: Int) -> Unit
 ): Modifier {
     val density = LocalDensity.current
-    val currentOnSwipe by rememberUpdatedState(onSwipe)
-    // Only read inside the drag callbacks, so updating it never triggers a recomposition.
-    var dragged by remember { mutableFloatStateOf(0f) }
+    val scope = rememberCoroutineScope()
+    val canSwipeNow by rememberUpdatedState(canSwipe)
+    val isSettledNow by rememberUpdatedState(isSettled)
+    val onSwipeNow by rememberUpdatedState(onSwipe)
 
     return Modifier.draggable(
-        state = rememberDraggableState { dragged += it },
+        state = rememberDraggableState { delta ->
+            if (!state.committed) {
+                val direction = if (state.offsetX + delta < 0f) 1 else -1
+                state.offsetX += if (canSwipeNow(direction)) delta else delta * SwipeEdgeResistance
+            }
+        },
         orientation = Orientation.Horizontal,
         enabled = enabled,
-        onDragStarted = { dragged = 0f },
+        // Grabbing the page while it is springing back continues from where it is.
+        // (Never while a committed swipe is animating: that one has to run to the end.)
+        onDragStarted = { if (!state.committed) state.settleJob?.cancel() },
         onDragStopped = { velocity ->
-            val distance = abs(dragged)
-            val byDistance = distance >= with(density) { SwipeDistance.toPx() }
-            val byFling = distance >= with(density) { SwipeFlingMinDistance.toPx() } &&
-                abs(velocity) >= with(density) { SwipeFlingVelocity.toPx() }
-            if (byDistance || byFling) {
-                val towards = if (byFling) velocity else dragged
-                currentOnSwipe(if (towards < 0f) 1 else -1)
+            if (!state.committed) {
+                val offset = state.offsetX
+                val direction = if (offset < 0f) 1 else -1
+                val distance = abs(offset)
+                val flingPx = with(density) { SwipeFlingVelocity.toPx() }
+                // A flick back towards where the drag started cancels instead of committing.
+                val sameWay = velocity * offset >= 0f
+                val byDistance = distance >= with(density) { SwipeDistance.toPx() } &&
+                    (sameWay || abs(velocity) < flingPx)
+                val byFling = sameWay && abs(velocity) >= flingPx &&
+                    distance >= with(density) { SwipeFlingMinDistance.toPx() }
+                val commit = (byDistance || byFling) && canSwipeNow(direction) && isSettledNow()
+
+                state.settleJob = scope.launch {
+                    if (commit) {
+                        state.committed = true
+                        try {
+                            onSwipeNow(direction)
+                            // Let navigation start its slide first, so both begin together.
+                            withFrameNanos { }
+                            animate(
+                                initialValue = state.offsetX,
+                                targetValue = 0f,
+                                animationSpec = tween(TabTransitionMs)
+                            ) { value, _ -> state.offsetX = value }
+                        } finally {
+                            state.offsetX = 0f
+                            state.committed = false
+                        }
+                    } else {
+                        animate(
+                            initialValue = state.offsetX,
+                            targetValue = 0f,
+                            animationSpec = spring(stiffness = Spring.StiffnessMedium)
+                        ) { value, _ -> state.offsetX = value }
+                    }
+                }
             }
-            dragged = 0f
         }
     )
 }
