@@ -1,0 +1,140 @@
+name: Build APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The API is a submodule, and the build derives its version from the
+          # full commit count.
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Android SDK packages
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK_ROOT" -path '*/cmdline-tools/*/bin/sdkmanager' -type f -print -quit)"
+          fi
+          if [ ! -x "$SDKMANAGER" ]; then
+            echo "error: sdkmanager not found under $SDK_ROOT" >&2
+            exit 1
+          fi
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865" "cmake;3.22.1"
+
+      # Optional secrets for stable signing: SIGNING_KEYSTORE_BASE64,
+      # SIGNING_STORE_PASSWORD, SIGNING_KEY_ALIAS, SIGNING_KEY_PASSWORD.
+      # Without them a temporary key is generated, so the APK cannot update
+      # an existing install.
+      - name: Prepare signing key
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYSTORE="$GITHUB_WORKSPACE/ci-release.jks"
+
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$KEYSTORE"
+            : "${STORE_PASSWORD:?SIGNING_STORE_PASSWORD must be set with SIGNING_KEYSTORE_BASE64}"
+            : "${KEY_ALIAS:?SIGNING_KEY_ALIAS must be set with SIGNING_KEYSTORE_BASE64}"
+            KEY_PASSWORD="${KEY_PASSWORD:-$STORE_PASSWORD}"
+            SIGNING_MODE="repository secret"
+          else
+            STORE_PASSWORD="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+            KEY_ALIAS="axmanager-ci"
+            KEY_PASSWORD="$STORE_PASSWORD"
+            keytool -genkeypair \
+              -keystore "$KEYSTORE" \
+              -storepass "$STORE_PASSWORD" \
+              -keypass "$KEY_PASSWORD" \
+              -alias "$KEY_ALIAS" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=AxManager CI, OU=CI, O=AxManager, L=CI, S=CI, C=US"
+            SIGNING_MODE="ephemeral (add SIGNING_KEYSTORE_BASE64 for update-compatible releases)"
+            echo "::warning::No signing secrets found. This APK is signed with a temporary key and cannot update an existing install."
+          fi
+
+          {
+            echo "signing.storeFile=$KEYSTORE"
+            echo "signing.storePassword=$STORE_PASSWORD"
+            echo "signing.keyAlias=$KEY_ALIAS"
+            echo "signing.keyPassword=$KEY_PASSWORD"
+          } >> local.properties
+
+          echo "mode=$SIGNING_MODE" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :manager:assembleRelease --no-daemon --stacktrace
+
+      - name: Read version
+        id: version
+        run: |
+          set -euo pipefail
+          APK="$(find manager/build/outputs/apk/release -name '*.apk' -print -quit)"
+          if [ -z "$APK" ]; then
+            echo "No APK was produced." >&2
+            exit 1
+          fi
+          VERSION_NAME="$(basename "$APK" | sed -E 's/^AxManager_v(.+)_[0-9]+-release.*\.apk$/\1/')"
+          if [ "$VERSION_NAME" = "$(basename "$APK")" ]; then
+            echo "Could not parse the version from $APK" >&2
+            exit 1
+          fi
+          echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AxManager-${{ steps.version.outputs.name }}
+          path: manager/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - name: Write job summary
+        run: |
+          {
+            echo "### AxManager ${{ steps.version.outputs.name }}"
+            echo ""
+            echo "Signing: ${{ steps.signing.outputs.mode }}"
+            echo ""
+            echo "| APK | Size |"
+            echo "|---|---|"
+            for apk in manager/build/outputs/apk/release/*.apk; do
+              echo "| $(basename "$apk") | $(du -h "$apk" | cut -f1) |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
